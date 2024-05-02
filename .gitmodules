@@ -1,0 +1,3 @@
+[submodule "tiny_ecs"]
+	path = tiny_ecs
+	url = https://github.com/ethanavatar/tiny_ecs
