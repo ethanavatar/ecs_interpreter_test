@@ -1,7 +1,9 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::slice::Iter;
 use std::iter::Peekable;
 use tiny_ecs::world::World;
-use tiny_ecs::world::ComponentPointer;
+use tiny_ecs::world::ComponentHandle;
 use crate::scanner::Token;
 
 macro_rules! operators {
@@ -43,24 +45,24 @@ pub enum Literal {
 #[derive(Debug, Clone)]
 pub struct Binary {
     pub operator: String,
-    pub left: ExpressionPointer,
-    pub right: ExpressionPointer,
+    pub left: ExpressionHandle,
+    pub right: ExpressionHandle,
 }
 
 #[derive(Debug, Clone)]
 pub struct Unary {
     pub operator: String,
-    pub operand: ExpressionPointer,
+    pub operand: ExpressionHandle,
 }
 
 #[derive(Debug, Clone)]
-pub enum ExpressionPointer {
-    Binary(ComponentPointer<Binary>),
-    Unary(ComponentPointer<Unary>),
-    Literal(ComponentPointer<Literal>),
+pub enum ExpressionHandle {
+    Binary(Rc<RefCell<ComponentHandle>>),
+    Unary(Rc<RefCell<ComponentHandle>>),
+    Literal(Rc<RefCell<ComponentHandle>>),
 }
 
-pub fn parse(ast: &mut World, tokens: &[Token]) -> ExpressionPointer {
+pub fn parse(ast: &mut World, tokens: &[Token]) -> ExpressionHandle {
     let mut tokens = tokens.iter().peekable();
     expression(ast, &mut tokens).unwrap()
 }
@@ -68,14 +70,14 @@ pub fn parse(ast: &mut World, tokens: &[Token]) -> ExpressionPointer {
 fn expression(
     ast: &mut World,
     tokens: &mut Peekable<Iter<Token>>,
-) -> Option<ExpressionPointer> {
+) -> Option<ExpressionHandle> {
     term(ast, tokens)
 }
 
 fn term(
     ast: &mut World,
     tokens: &mut Peekable<Iter<Token>>,
-) -> Option<ExpressionPointer> {
+) -> Option<ExpressionHandle> {
     let mut left = factor(ast, tokens)?;
     let operators = operators!(["+", "-"]);
 
@@ -91,7 +93,7 @@ fn term(
             }
         );
 
-        left = ExpressionPointer::Binary(expr);
+        left = ExpressionHandle::Binary(expr);
     }
 
     Some(left)
@@ -100,7 +102,7 @@ fn term(
 fn factor(
     ast: &mut World,
     tokens: &mut Peekable<Iter<Token>>,
-) -> Option<ExpressionPointer> {
+) -> Option<ExpressionHandle> {
     let mut left = unary(ast, tokens)?;
     let operators = operators!(["*", "/"]);
 
@@ -116,7 +118,7 @@ fn factor(
             }
         );
 
-        left = ExpressionPointer::Binary(expr);
+        left = ExpressionHandle::Binary(expr);
     }
 
     Some(left)
@@ -125,20 +127,20 @@ fn factor(
 fn unary(
     ast: &mut World,
     tokens: &mut Peekable<Iter<Token>>,
-) -> Option<ExpressionPointer> {
+) -> Option<ExpressionHandle> {
     let operators = operators!(["+", "-"]);
 
     if let Some(op) = consume_either(tokens, &operators).cloned() {
         let Token::Operator { operator } = op else { unreachable!() };
-        let operand = unary(ast, tokens)?;
         let entity = ast.new_entity();
+        let operand = unary(ast, tokens)?;
         let expr = ast.add_component(entity,
             Unary {
                 operator,
                 operand,
             }
         );
-        Some(ExpressionPointer::Unary(expr))
+        Some(ExpressionHandle::Unary(expr))
     } else {
         primary(ast, tokens)
     }
@@ -147,18 +149,18 @@ fn unary(
 fn primary(
     ast: &mut World,
     tokens: &mut Peekable<Iter<Token>>,
-) -> Option<ExpressionPointer> {
+) -> Option<ExpressionHandle> {
     let token = tokens.next()?;
     match token {
         Token::Integer { value } => {
             let entity = ast.new_entity();
             let expr = ast.add_component(entity, Literal::Integer(*value));
-            Some(ExpressionPointer::Literal(expr))
+            Some(ExpressionHandle::Literal(expr))
         }
         Token::Float { value } => {
             let entity = ast.new_entity();
             let expr = ast.add_component(entity, Literal::Float(*value));
-            Some(ExpressionPointer::Literal(expr))
+            Some(ExpressionHandle::Literal(expr))
         },
         Token::Grouping { char_: '('  } => {
             let expr = expression(ast, tokens)?;

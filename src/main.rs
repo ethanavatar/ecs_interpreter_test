@@ -3,41 +3,67 @@ mod parser;
 
 use tiny_ecs::world::World;
 use tiny_ecs::systems::Systems;
-use tiny_ecs::world::ComponentPointer;
 
-use parser::ExpressionPointer;
-use parser::Binary;
+use parser::ExpressionHandle;
 use parser::Unary;
 use parser::Literal;
+use parser::Binary;
 
-fn print_expr(ast: &World, expr: ExpressionPointer) {
-    match expr {
-        ExpressionPointer::Binary(component) => {
-            let binary = component.get(ast).unwrap();
-            print!("{{");
-            print_expr(ast, binary.left);
-            print!(" {} ", binary.operator);
-            print_expr(ast, binary.right);
-            print!("}}");
+use std::any::TypeId;
+
+enum Expression {
+    Binary(Binary),
+    Unary(Unary),
+    Literal(Literal),
+}
+
+fn get_expression(ast: &World, handle: &ExpressionHandle) -> Expression {
+    let component = match handle {
+        ExpressionHandle::Binary(component) => component,
+        ExpressionHandle::Unary(component) => component,
+        ExpressionHandle::Literal(component) => component,
+    };
+
+    let expr_type = component.borrow().component_type();
+    match expr_type {
+        _ if expr_type == TypeId::of::<Binary>() => {
+            let binary = component.borrow().get::<Binary>(ast).unwrap();
+            Expression::Binary(binary.clone())
         }
-        ExpressionPointer::Unary(component) => {
-            let unary = component.get(ast).unwrap();
-            print!("{{");
-            print!("{}", unary.operator);
-            print_expr(ast, unary.operand);
-            print!("}}");
+        _ if expr_type == TypeId::of::<Unary>() => {
+            let unary = component.borrow().get::<Unary>(ast).unwrap();
+            Expression::Unary(unary.clone())
         }
-        ExpressionPointer::Literal(component) => {
-            let literal = component.get(ast).unwrap();
-            match literal {
-                Literal::Integer(value) => print!("{}", value),
-                Literal::Float(value) => print!("{}", value),
-            }
+        _ if expr_type == TypeId::of::<Literal>() => {
+            let literal = component.borrow().get::<Literal>(ast).unwrap();
+            Expression::Literal(literal.clone())
         }
+        _ => unreachable!(),
     }
 }
 
-fn reduce_literals_with_unaries(ast: &mut World) {
+fn print_expr(ast: &World, expr: &ExpressionHandle) {
+    let expr = get_expression(ast, expr);
+    match expr {
+        Expression::Binary(Binary { operator, left, right }) => {
+            print!("{{");
+            print_expr(ast, &left);
+            print!(" {} ", operator);
+            print_expr(ast, &right);
+            print!("}}");
+        }
+        Expression::Unary(Unary { operator, operand }) => {
+            print!("{{");
+            print!("{}, ", operator);
+            print_expr(ast, &operand);
+            print!("}}");
+        }
+        Expression::Literal(Literal::Integer(value)) => print!("{}", value),
+        Expression::Literal(Literal::Float(value)) => print!("{}", value),
+    }
+}
+
+fn reduce_unary_to_negative_literal(ast: &mut World) {
     let unaries = ast.borrow_components::<Unary>().unwrap().to_vec();
 
     for (id, unary) in unaries.iter().enumerate() {
@@ -53,22 +79,20 @@ fn reduce_literals_with_unaries(ast: &mut World) {
         }
 
         let operand = match operand {
-            ExpressionPointer::Binary(_) => continue,
-            ExpressionPointer::Unary(_) => continue,
-            ExpressionPointer::Literal(c) => c.clone(),
+            ExpressionHandle::Binary(_) => continue,
+            ExpressionHandle::Unary(_) => continue,
+            ExpressionHandle::Literal(c) => c,
         };
 
-        let operand = operand.get(ast).unwrap();
+        let operand = operand.borrow().get::<Literal>(ast).unwrap();
         let value = match operand {
             Literal::Integer(value) => Literal::Integer(-value),
             Literal::Float(value) => Literal::Float(-value),
         };
 
         let entity = ast.new_entity();
-        let component = ast.add_component(entity, value);
-
-        println!("Replacing unary at {} with literal at {}", id, entity);
-        ast.replace_component(id, component);
+        ast.add_component(entity, value);
+        ast.repoint_any::<Unary, Literal>(id, entity);
     }
 }
 
@@ -79,12 +103,12 @@ fn main() {
     let mut ast = World::new();
     let expression = parser::parse(&mut ast, &tokens);
 
-    print_expr(&ast, expression.clone());
+    print_expr(&ast, &expression);
     println!();
 
     let mut systems = Systems::new();
-    systems.add_system(reduce_literals_with_unaries);
+    systems.add_system(reduce_unary_to_negative_literal);
     systems.run(&mut ast);
 
-    print_expr(&ast, expression);
+    print_expr(&ast, &expression);
 }
